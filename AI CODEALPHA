@@ -1,0 +1,288 @@
+//TASK1
+from deep_translator import GoogleTranslator
+
+def translate_text(text, source_lang, target_lang):
+    translation = GoogleTranslator(source=source_lang, target=target_lang).translate(text)
+    return translation
+
+if __name__ == "__main__":
+    text = "Hello, how are you?"
+    source_lang = "en"
+    target_lang = "fr"
+    
+    try:
+        translated_text = translate_text(text, source_lang, target_lang)
+        print(f"Original text: {text}")
+        print(f"Translated text: {translated_text}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+//TASK2
+import nltk
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer
+import random
+
+# Download required NLTK resources
+nltk.download('punkt')
+nltk.download('wordnet')
+
+# Sample FAQ data
+faq_data = {
+    "What is your return policy?": "You can return any item within 30 days of purchase for a full refund.",
+    "How long does shipping take?": "Shipping usually takes 5-7 business days.",
+    "Do you offer customer support?": "Yes, we offer 24/7 customer support via chat and email.",
+    "What payment methods do you accept?": "We accept credit cards, PayPal, and bank transfers.",
+    "Can I change my order after I’ve placed it?": "Yes, you can change your order within 1 hour of placing it."
+}
+
+# Function to preprocess the input question
+def preprocess_question(question):
+    lemmatizer = WordNetLemmatizer()
+    tokens = word_tokenize(question.lower())
+    lemmatized_tokens = [lemmatizer.lemmatize(token) for token in tokens]
+    return lemmatized_tokens
+
+# Function to find the best matching FAQ
+def get_best_faq(user_question):
+    user_tokens = preprocess_question(user_question)
+    best_match = None
+    highest_similarity = 0
+
+    for faq in faq_data.keys():
+        faq_tokens = preprocess_question(faq)
+        similarity = len(set(user_tokens).intersection(set(faq_tokens))) / len(set(user_tokens).union(set(faq_tokens)))
+
+        if similarity > highest_similarity:
+            highest_similarity = similarity
+            best_match = faq
+
+    return best_match
+
+# Chatbot function
+def chatbot():
+    print("Welcome to the FAQ Chatbot! Type 'exit' to end the conversation.")
+    while True:
+        user_input = input("You: ")
+        if user_input.lower() == 'exit':
+            print("Chatbot: Thank you for your questions! Goodbye!")
+            break
+
+        best_faq = get_best_faq(user_input)
+
+        if best_faq:
+            print(f"Chatbot: {faq_data[best_faq]}")
+        else:
+            print("Chatbot: I'm sorry, I don't have an answer for that.")
+
+if __name__ == "__main__":
+    chatbot()
+//TASK3
+import numpy as np
+from music21 import converter, instrument, note, chord, stream
+from keras.models import Sequential
+from keras.layers import LSTM, Dense, Activation, Dropout
+from keras.utils import to_categorical
+import os
+
+# Load MIDI files and extract notes
+def get_notes():
+    notes = []
+    for file in os.listdir("midi_files"):
+        if file.endswith(".mid"):
+            midi = converter.parse(os.path.join("midi_files", file))
+            notes_to_parse = None
+            
+            # Get all notes and chords from the MIDI file
+            try:
+                notes_to_parse = midi.flat.notes
+            except Exception as e:
+                print(f"Error parsing {file}: {e}")
+                continue
+            
+            for element in notes_to_parse:
+                if isinstance(element, note.Note):
+                    notes.append(str(element.pitch))
+                elif isinstance(element, chord.Chord):
+                    notes.append('.'.join(str(n) for n in element.normalOrder))
+    
+    return notes
+
+# Prepare sequences for training
+def prepare_sequences(notes, sequence_length=100):
+    pitch_names = sorted(set(notes))
+    note_to_int = {note: number for number, note in enumerate(pitch_names)}
+    
+    network_input = []
+    network_output = []
+    
+    for i in range(len(notes) - sequence_length):
+        seq_in = notes[i:i + sequence_length]
+        seq_out = notes[i + sequence_length]
+        network_input.append([note_to_int[n] for n in seq_in])
+        network_output.append(note_to_int[seq_out])
+    
+    n_patterns = len(network_input)
+    n_vocab = len(pitch_names)
+    
+    # Reshape input into a format compatible with LSTM
+    network_input = np.reshape(network_input, (n_patterns, sequence_length, 1))
+    network_input = network_input / float(n_vocab)  # Normalize input
+    network_output = to_categorical(network_output, num_classes=n_vocab)
+    
+    return network_input, network_output
+
+# Build the LSTM model
+def create_model(input_shape, n_vocab):
+    model = Sequential()
+    model.add(LSTM(256, input_shape=input_shape, return_sequences=True))
+    model.add(Dropout(0.3))
+    model.add(LSTM(256))
+    model.add(Dropout(0.3))
+    model.add(Dense(n_vocab))
+    model.add(Activation('softmax'))
+    
+    model.compile(loss='categorical_crossentropy', optimizer='adam')
+    return model
+
+# Generate music
+def generate_music(model, network_input, int_to_note, n_vocab, sequence_length=100):
+    start = np.random.randint(0, len(network_input) - 1)
+    pattern = network_input[start]
+    
+    prediction_output = []
+    
+    # Generate notes
+    for note_index in range(500):  # Generate 500 notes
+        prediction_input = np.reshape(pattern, (1, len(pattern), 1))
+        prediction_input = prediction_input / float(n_vocab)
+        
+        prediction = model.predict(prediction_input, verbose=0)
+        index = np.argmax(prediction)
+        result = int_to_note[index]
+        prediction_output.append(result)
+        
+        # Update the pattern
+        pattern = np.append(pattern, [[index]], axis=1)
+        pattern = np.delete(pattern, 0, axis=1)
+    
+    return prediction_output
+
+if __name__ == "__main__":
+    notes = get_notes()
+    network_input, network_output = prepare_sequences(notes)
+    
+    model = create_model((network_input.shape[1], network_input.shape[2]), len(set(notes)))
+    model.fit(network_input, network_output, epochs=100, batch_size=64)
+
+    # Save the model
+    model.save("music_generator.h5")
+
+    # Generate music
+    int_to_note = {number: note for number, note in enumerate(sorted(set(notes)))}
+    generated_notes = generate_music(model, network_input, int_to_note, len(set(notes)))
+
+    # Save generated music as MIDI
+    offset = 0
+    output_notes = []
+
+    for item in generated_notes:
+        if ('.' in item) or item.isdigit():  # If it's a chord
+            notes_in_chord = item.split('.')
+            notes = [note.Note(int(n)) for n in notes_in_chord]
+            new_chord = chord.Chord(notes)
+            new_chord.offset = offset
+            output_notes.append(new_chord)
+        else:  # If it's a note
+            new_note = note.Note(item)
+            new_note.offset = offset
+            output_notes.append(new_note)
+        
+        offset += 0.5  # Adjust the offset for the next note
+
+    midi_stream = stream.Stream(output_notes)
+    midi_stream.write('midi', fp='generated_music.mid')
+//TASK4
+import cv2
+import numpy as np
+from sort import *
+
+# Initialize YOLO
+net = cv2.dnn.readNetFromDarknet("yolov4.cfg", "yolov4.weights")
+net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+
+# Initialize SORT tracker
+mot_tracker = Sort()
+
+# Initialize video capture
+cap = cv2.VideoCapture(0)  # Use 0 for default camera, or provide a video file path
+
+while True:
+    # Read frame from the video
+    ret, frame = cap.read()
+    
+    # Get frame dimensions
+    height, width = frame.shape[:2]
+    
+    # Create a blob from the frame
+    blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
+    
+    # Set the blob as the input to the network
+    net.setInput(blob)
+    
+    # Get the output layer names
+    output_layers = net.getUnconnectedOutLayersNames()
+    
+    # Forward pass through the network
+    outputs = net.forward(output_layers)
+    
+    # Initialize lists for detected objects
+    boxes = []
+    confidences = []
+    class_ids = []
+    
+    # Process the outputs
+    for output in outputs:
+        for detection in output:
+            scores = detection[5:]
+            class_id = np.argmax(scores)
+            confidence = scores[class_id]
+            
+            if confidence > 0.5:  # Adjust the confidence threshold as needed
+                # Object detected
+                center_x = int(detection[0] * width)
+                center_y = int(detection[1] * height)
+                width_box = int(detection[2] * width)
+                height_box = int(detection[3] * height)
+                
+                # Rectangle coordinates
+                x = int(center_x - width_box / 2)
+                y = int(center_y - height_box / 2)
+                
+                boxes.append([x, y, width_box, height_box])
+                confidences.append(float(confidence))
+                class_ids.append(class_id)
+    
+    # Apply non-maximum suppression to eliminate redundant overlapping boxes
+    indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
+    
+    # Update SORT tracker
+    detections = np.array(boxes)
+    tracks = mot_tracker.update(detections)
+    
+    # Draw bounding boxes and track IDs
+    for track in tracks:
+        x, y, width, height = [int(v) for v in track]
+        cv2.rectangle(frame, (x, y), (x + width, y + height), (0, 255, 0), 2)
+        cv2.putText(frame, str(int(track[4])), (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    
+    # Display the resulting frame
+    cv2.imshow('Object Detection and Tracking', frame)
+    
+    # Press 'q' to exit the loop
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Release the video capture and close all windows
+cap.release()
+cv2.destroyAllWindows()
